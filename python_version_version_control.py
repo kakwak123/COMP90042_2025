@@ -488,7 +488,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Hyperparameters for the training:
 # - learning_rate = ADAMW(1e-5) Optimizer
 # - batch_size = 16
-# - epochs = 3
+# - epochs = 10
 # 
 # We will use dev-claims for validation and test-claims for testing.
 # 
@@ -548,7 +548,7 @@ def prepare_data(df, evidence_df, label_map):
             items.append({'text': text, 'label_id': label})
     return items
 
-# Build datasets and dataloaders
+# build datasets and dataloaders
 train_items = prepare_data(train_df, evidence_df, label_map)
 dev_items   = prepare_data(dev_df,   evidence_df, label_map)
 
@@ -565,17 +565,20 @@ print("Dev Dataset: ", dev_dataset[0])
 train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
 dev_loader   = DataLoader(dev_dataset,   batch_size=16)
 
-# Optimizer
+
+
+# %%
+# optimizer
 optimizer = AdamW(model.parameters(), lr=1e-5)
 
-# Training loop (3 epochs)
+# training loop (3 epochs)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
 
 for epoch in range(3):
     model.train()
     total_loss = 0
-    # Add progress bar for batches
+    # add progress bar for batches
     progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/3 (Training)")
     for batch in progress_bar:
         optimizer.zero_grad()
@@ -593,13 +596,13 @@ for epoch in range(3):
         optimizer.step()
         total_loss += loss.item()
         
-        # Update progress bar with current loss
+        # update progress bar with current loss
         progress_bar.set_postfix({'loss': f"{loss.item():.4f}"})
 
     avg_train_loss = total_loss / len(train_loader)
     print(f"Epoch {epoch+1} Train loss: {avg_train_loss:.4f}")
 
-    # Evaluation on dev set
+    # evaluation on dev set
     model.eval()
     preds, trues = [], []
     eval_progress = tqdm(dev_loader, desc=f"Epoch {epoch+1}/3 (Evaluating)")
@@ -618,8 +621,10 @@ for epoch in range(3):
     print(f"Epoch {epoch+1} Dev  acc: {acc:.4f}")
     print(classification_report(trues, preds, target_names=label_map.keys()))
 
-
-
+# %% [markdown]
+# Now I am going to load the best model state to store in state_dict to a file
+# 
+# Also I will now need to prepare and batch the test data for prediction and for that I will use pytorch dataset and dataloader for convenience consistency and speed as google collab is slow
 
 # %% [markdown]
 # ## Object Oriented Programming codes here
