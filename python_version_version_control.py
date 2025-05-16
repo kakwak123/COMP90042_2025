@@ -62,9 +62,6 @@ for url, filename in zip(urls, filenames):
 
 
 # %%
-
-
-# %%
 import faiss
 from sentence_transformers import CrossEncoder
 from sentence_transformers import InputExample, SentenceTransformer, losses
@@ -196,7 +193,7 @@ def save_retrieval(retrieval, path):
         output[retrieval.iloc[i]['ID']] = {}
         output[retrieval.iloc[i]['ID']]['evidences'] = retrieval.iloc[i]['evidences']
         output[retrieval.iloc[i]['ID']]['claim_label'] = retrieval.iloc[i]['claim_label']
-        output[retrieval.iloc[i]['ID']]['claim_text'] = retrieval.iloc[i]['claim_texts']
+        output[retrieval.iloc[i]['ID']]['claim_text'] = retrieval.iloc[i]['claim_text']
 
     with open(path, 'w') as file:
         file.write(json.dumps(output))
@@ -404,9 +401,8 @@ trainer.train()
 
 # %%
 
-dev_retrieval = retrieve(evidence_embeddings, dev_claims_embeddings, evidence_df , dev_df, 150, 5, True, 0, cross_encoder, True)
-
-save_retrieval(dev_retrieval, 'dev_retrieval.json')
+# dev_retrieval = retrieve(evidence_embeddings, dev_claims_embeddings, evidence_df , dev_df, 150, 5, True, 0, cross_encoder, True)
+# save_retrieval(dev_retrieval, 'dev_retrieval.json')
 
 
 # %% [markdown]
@@ -449,14 +445,29 @@ with open('test-output.json', 'r') as f:
 # Decisions based on cased and uncased is uncased because itt is faster and no need to worry about capital named entities.
 # {SUPPORTS, REFUTES, NOT_ENOUGH_INFO, DISPUTED} There are 4 classes in the evidence classification task.
 # 
+# I also want to keep the label order and everything simple as possible.
+# 
 
 # %%
+# import that wasn't done in the beginning
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
+# Model Choice and Label List Initialization
 classifer_model = "distilbert-base-uncased"
-label_list 
+label_list=["SUPPORTS", "REFUTES", "NOT ENOUGH INFO", "NOT ENOUGH INFO"]
+num_labels = len(label_list)
+label_map = {label: i for i, label in enumerate(label_list)}
+id2label = {i: label for i, label in enumerate(label_list)}
 
-# %% [markdown]
-# 
+print("Label Map: ", label_map)
+print("ID to Label Map: ", id2label)
+
+# Load the model and tokenizer
+tokenizer = AutoTokenizer.from_pretrained(classifer_model)
+model = AutoModelForSequenceClassification.from_pretrained(classifer_model, num_labels=num_labels, id2label=id2label, label2id=label_map)
+
+# Load the model to GPU if available
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # %% [markdown]
 # ## Object Oriented Programming codes here
