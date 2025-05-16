@@ -22,6 +22,8 @@
 %pip install accelerate
 %pip install transformers[torch]
 %pip install huggingface_hub[hf_xet]
+%pip install seaborn
+%pip install matplotlib
 
 # %%
 import gdown
@@ -452,7 +454,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 # Model Choice and Label List Initialization
 classifer_model = "distilbert-base-uncased"
-label_list=["SUPPORTS", "REFUTES", "NOT ENOUGH INFO", "NOT ENOUGH INFO"]
+label_list=["SUPPORTS", "REFUTES", "NOT_ENOUGH_INFO", "DISPUTED"]
 num_labels = len(label_list)
 label_map = {label: i for i, label in enumerate(label_list)}
 id2label = {i: label for i, label in enumerate(label_list)}
@@ -500,94 +502,53 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # %%
 import torch
 from torch.utils.data import DataLoader, Dataset
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, classification_report, confusion_matrix
+import seaborn as sns
+import numpy as np
 
 # custom pytorch dataset class
 class ClaimEvidenceDataset(Dataset):
-    def __init__(self, data_list, tokenizer, max_len):
+    def __init__(self, data_list, tokenizer, max_len=128):
         self.tokenizer = tokenizer
-        # data_list is expected to be a list of dictionaries:
-        # [{'text_input': 'claim [SEP] evidence', 'label_id': 0}, ...]
-        self.text_inputs = [item['text_input'] for item in data_list]
-        self.label_ids = [item['label_id'] for item in data_list]
+        self.texts = [item['text'] for item in data_list]
+        self.labels = [item['label_id'] for item in data_list]
         self.max_len = max_len
 
     def __len__(self):
-        return len(self.text_inputs)
+        return len(self.texts)
 
     def __getitem__(self, idx):
-        text = str(self.text_inputs[idx])
-        label = int(self.label_ids[idx])
-
-        encoding = self.tokenizer.encode_plus(
-            text,
+        encoding = self.tokenizer(
+            self.texts[idx],
             add_special_tokens=True,
             max_length=self.max_len,
-            return_token_type_ids=False,
             padding='max_length',
             truncation=True,
-            return_attention_mask=True,
-            return_tensors='pt',
+            return_tensors='pt'
         )
-
         return {
-            'input_ids': encoding['input_ids'].flatten(),
-            'attention_mask': encoding['attention_mask'].flatten(),
-            'labels': torch.tensor(label, dtype=torch.long)
+            'input_ids':      encoding['input_ids'].squeeze(0),
+            'attention_mask': encoding['attention_mask'].squeeze(0),
+            'labels':         torch.tensor(self.labels[idx], dtype=torch.long)
         }
 
 # function to match the evidence with the claim and prepare the dataset
-def prepare_dataset(test_output, label_map, evidence_df):
-    data_list = []
-    for claim_id, claim_data in test_output.items():
-        claim_text = claim_data['claim_text']
-        claim_label = claim_data['claim_label']
-        
-        # For each evidence ID in the list
-        for evidence_id in claim_data['evidences']:
-            # Look up the evidence text in evidence_df
-            evidence_row = evidence_df[evidence_df['ID'] == evidence_id]
-            if not evidence_row.empty:
-                evidence_text = evidence_row['value'].iloc[0]
-                text_input = f"{claim_text} [SEP] {evidence_text}"
-                label_id = label_map.get(claim_label, 2)  # Default to NOT_ENOUGH_INFO if not found
-                data_list.append({'text_input': text_input, 'label_id': label_id})
-    return data_list
+def prepare_data(df, evidence_df, label_map):
+    items = []
+    for _, row in df.iterrows():
+        claim = row['claim_text']
+        for evid_id in row.get('evidences', []):
+            evid_row = evidence_df[evidence_df['ID'] == evid_id]
+            if evid_row.empty: 
+                continue
+            text = f"{claim} [SEP] {evid_row['value'].iloc[0]}"
+            label = label_map[row['claim_label']]
+            items.append({'text': text, 'label_id': label})
+    return items
 
-# Print out a few samples to understand the structure
-print(list(test_output.keys())[:5])
-for claim_id, claim_data in list(test_output.items())[:3]:
-    print(f"Claim ID: {claim_id}")
-    print(f"Claim Text: {claim_data['claim_text']}")
-    print(f"Evidence IDs: {claim_data['evidences']}")
-    print(f"Claim Label: {claim_data['claim_label']}")
-    print("\n")
 
-# Test out the function
-test_data_list = prepare_dataset(test_output, label_map, evidence_df)
-# Create the dataset
-test_dataset = ClaimEvidenceDataset(test_data_list, tokenizer, max_len=512)
-# Create DataLoader
-test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=False)
-# Move model to GPU
-model.to(device)
-# Set model to evaluation mode
-model.eval()
-# Initialize lists to store predictions and true labels
-predictions = []
-true_labels = []
-# Iterate through the DataLoader
-for batch in test_dataloader:
-    input_ids = batch['input_ids'].to(device)
-    attention_mask = batch['attention_mask'].to(device)
-    labels = batch['labels'].to(device)
 
-    with torch.no_grad():
-        outputs = model(input_ids, attention_mask=attention_mask)
-        logits = outputs.logits
-        _, preds = torch.max(logits, dim=1)
 
-    predictions.extend(preds.cpu().numpy())
-    true_labels.extend(labels.cpu().numpy())
 
 
 # %% [markdown]
