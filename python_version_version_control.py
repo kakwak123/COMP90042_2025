@@ -502,9 +502,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # %%
 import torch
 from torch.utils.data import DataLoader, Dataset
+from torch.optim import AdamW
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, classification_report, confusion_matrix
 import seaborn as sns
 import numpy as np
+from tqdm import tqdm
 
 # custom pytorch dataset class
 class ClaimEvidenceDataset(Dataset):
@@ -546,7 +548,75 @@ def prepare_data(df, evidence_df, label_map):
             items.append({'text': text, 'label_id': label})
     return items
 
+# Build datasets and dataloaders
+train_items = prepare_data(train_df, evidence_df, label_map)
+dev_items   = prepare_data(dev_df,   evidence_df, label_map)
 
+# print to debug it is working simple 
+print("Done preparing daata: ", len(train_items), " train items and ", len(dev_items), " dev items")
+
+train_dataset = ClaimEvidenceDataset(train_items, tokenizer)
+dev_dataset   = ClaimEvidenceDataset(dev_items,   tokenizer)
+
+# print to debug the claimevidence dataset is working
+print("Train Dataset: ", train_dataset[0])
+print("Dev Dataset: ", dev_dataset[0])
+
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+dev_loader   = DataLoader(dev_dataset,   batch_size=16)
+
+# Optimizer
+optimizer = AdamW(model.parameters(), lr=1e-5)
+
+# Training loop (3 epochs)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+for epoch in range(3):
+    model.train()
+    total_loss = 0
+    # Add progress bar for batches
+    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/3 (Training)")
+    for batch in progress_bar:
+        optimizer.zero_grad()
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        labels = batch['labels'].to(device)
+
+        outputs = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels
+        )
+        loss = outputs.loss
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+        
+        # Update progress bar with current loss
+        progress_bar.set_postfix({'loss': f"{loss.item():.4f}"})
+
+    avg_train_loss = total_loss / len(train_loader)
+    print(f"Epoch {epoch+1} Train loss: {avg_train_loss:.4f}")
+
+    # Evaluation on dev set
+    model.eval()
+    preds, trues = [], []
+    eval_progress = tqdm(dev_loader, desc=f"Epoch {epoch+1}/3 (Evaluating)")
+    with torch.no_grad():
+        for batch in eval_progress:
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+            logits = outputs.logits
+            preds.extend(torch.argmax(logits, dim=1).cpu().tolist())
+            trues.extend(labels.cpu().tolist())
+
+    acc = accuracy_score(trues, preds)
+    print(f"Epoch {epoch+1} Dev  acc: {acc:.4f}")
+    print(classification_report(trues, preds, target_names=label_map.keys()))
 
 
 
