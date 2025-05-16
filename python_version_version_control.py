@@ -21,6 +21,7 @@
 %pip install gdown
 %pip install accelerate
 %pip install transformers[torch]
+%pip install huggingface_hub[hf_xet]
 
 # %%
 import gdown
@@ -83,7 +84,7 @@ def retrieve(evi_ebds, claim_ebds, evi_df, claim_df, retrival_top_k, rerank_top_
 
     i = 0
     counts = 0
-    claim_texts  =[]
+    claim_texts = []
     total = len(claim_ebds)
     for dev_claim_embedding in claim_ebds:
         faiss.normalize_L2(dev_claim_embedding.reshape(1, -1))
@@ -129,17 +130,17 @@ def retrieve(evi_ebds, claim_ebds, evi_df, claim_df, retrival_top_k, rerank_top_
                     count += 1
             counts += count / len(claim_df.iloc[i]['evidences'])
 
-
-
         print('Progress ', round(i * 100 / total, 3), '%')
         i += 1
 
-
     print("R: ", counts/ i)
-    retrieval['ID'] = claim_df['ID']
+    
+    # Create the dataframe with all necessary information
+    retrieval['ID'] = claim_df['ID'].values[:len(retrieved_evidences)]
     retrieval['evidences'] = retrieved_evidences
     retrieval['claim_label'] = retrieved_labels
     retrieval['claim_text'] = claim_texts
+    
     return retrieval
 
 def mine_hard_negatives(retrieved_evidences, ground_truth_evidences):
@@ -468,6 +469,57 @@ model = AutoModelForSequenceClassification.from_pretrained(classifer_model, num_
 
 # Load the model to GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# %% [markdown]
+# For preparing training data from claims for the ground truth evidence, I will be using  one training instance per evidence.
+# E.g.
+# 1. (claim_tex [SEP] evidence_text_1, "SUPPORTS")
+# 2. (claim_text [SEP] evidence_text_2, "SUPPORTS")
+# 3. (claim_text [SEP] evidence_text_3, "REFUTES")
+# 4. (claim_text [SEP] evidence_text_4, "NOT_ENOUGH_INFO")
+# 5. (claim_text [SEP] evidence_text_5, "DISPUTED")
+# 
+# Kind of ways, because this is the best way to train data for the model.
+# 
+# Some options we considered were: only using one of the randomly selected evidence or first evidence.
+# Or put all evidenece in one instance.
+# 
+# We will also use PyTorch for the training to do it manually instead of huggingface trainer.
+# 
+# Hyperparameters for the training:
+# - learning_rate = ADAMW(1e-5) Optimizer
+# - batch_size = 16
+# - epochs = 3
+# 
+# We will use dev-claims for validation and test-claims for testing.
+# 
+# We will try to look for f score and accuracy for the evaluation.
+# 
+# For the ones that has label but no listed evidence, we will create a special input format like
+# (claim_text [SEP], "NOT_ENOUGH_INFO") since we are not allowed to modify the dataset or can't skip it written in the project description.
+# 
+# 
+
+# %%
+import torch
+from torch.utils.data import DataLoader, Dataset
+import pandas as pd
+
+# custom pytorch dataset class
+class ClaimEvidenceDataset(Dataset):
+    def __init__(self, claims, evidences, labels):
+        self.claims = claims
+        self.evidences = evidences
+        self.labels = labels
+
+    def __len__(self):
+        return len(self.claims)
+
+    def __getitem__(self, idx):
+        claim = self.claims[idx]
+        evidence = self.evidences[idx]
+        label = self.labels[idx]
+        return claim, evidence, label
 
 # %% [markdown]
 # ## Object Oriented Programming codes here
