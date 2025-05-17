@@ -3,17 +3,28 @@
 # *Make sure you change the file name with your group id.*
 
 # %% [markdown]
-# # Readme (EDITED BY JOHN and Guwei)
+# # Readme
 # 
-# *If there is something to be noted for the marker, please mention here.*
+# (EDITED BY JOHN and Guwei)
 # 
-# *If you are planning to implement a program with Object Oriented Programming style, please put those the bottom of this ipynb file*
-
-# %% [markdown]
-# # 1.DataSet Processing
-# (You can add as many code blocks and text blocks as you need. However, YOU SHOULD NOT MODIFY the section title)
+# ## Group Members
+# - John Kim (1079731)
+# - Guwei Ke
+# 
+# ## Overview
+# 
+# This notebook contains codes to run the climate claim classification model. 
+# 
+# ## Usage
+# 
+# To run the model, please follow the steps below:
+# 1. Install jupyter notebook, if you haven't already. You can either use docker or install it directly on your machine. You can even use Google Colab to run the notebook.
+# 2. We have pip requirements in the block below, so you can run the whole notebook to install the required packages.
+# 3. Datasets will be automatically downloaded when you run the notebook. The dataset is quite large, so it may take some time to download.
 
 # %%
+# Below is a script to install the required packages for the project.
+
 %pip install sentence-transformers
 %pip install faiss-cpu
 %pip install faiss-gpu
@@ -25,7 +36,13 @@
 %pip install seaborn
 %pip install matplotlib
 
+# %% [markdown]
+# # 1.DataSet Processing
+# (You can add as many code blocks and text blocks as you need. However, YOU SHOULD NOT MODIFY the section title)
+
 # %%
+# This allows you to download files from Google Drive directly into your Colab environment. these files are stored in John's google drive.
+
 import gdown
 import os
 
@@ -67,6 +84,7 @@ for url, filename in zip(urls, filenames):
 # Imports
 
 # %%
+# Below are the aggregate imports for the project.
 import faiss
 from sentence_transformers import CrossEncoder
 from sentence_transformers import InputExample, SentenceTransformer, losses
@@ -83,7 +101,11 @@ import seaborn as sns
 import numpy as np
 from tqdm import tqdm
 
+# %% [markdown]
+# Helper functions to run the retrieval model
+
 # %%
+
 def retrieve(evi_ebds, claim_ebds, evi_df, claim_df, retrival_top_k, rerank_top_k,threshold_activated,score_threshold, cross_encoder,dev):
     embedding_dim = evi_ebds.shape[1]
     index = faiss.IndexFlatL2(embedding_dim)
