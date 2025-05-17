@@ -43,9 +43,6 @@
 # %%
 # This allows you to download files from Google Drive directly into your Colab environment. these files are stored in John's google drive.
 
-import gdown
-import os
-
 # from google.colab import drive
 # drive.mount('/content/drive', force_remount=True)
 
@@ -66,7 +63,7 @@ urls = [
 filenames = [
     "evidence.json",
     "dev-claims.json",
-    "train-claims.json",
+    TRAIN_CLAIMS_FILE,
     "test-claims-unlabelled.json",
     "dev-claims-baseline.json"
 ]
@@ -78,20 +75,7 @@ for url, filename in zip(urls, filenames):
     else:
         print(f"{filename} already exists. Skipping download.")
 
-
-
-
 # %%
-import faiss
-from sentence_transformers import CrossEncoder
-from sentence_transformers import InputExample, SentenceTransformer, losses
-from torch.utils.data import DataLoader
-import random
-import torch
-import pandas as pd
-import json
-import re
-
 def retrieve(evi_ebds, claim_ebds, evi_df, claim_df, retrival_top_k, rerank_top_k,threshold_activated,score_threshold, cross_encoder,dev):
     embedding_dim = evi_ebds.shape[1]
     index = faiss.IndexFlatL2(embedding_dim)
@@ -271,8 +255,8 @@ dev_df.head()
 # Calculate sentence embeddings for evidence dataset and trainning dataset.
 
 # %%
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model = SentenceTransformer('all-MiniLM-L6-v2', device=device)
+# device = "cuda" if torch.cuda.is_available() else "cpu"
+model = SentenceTransformer('all-MiniLM-L6-v2', device=DEVICE)
 
 train_data = load_positive_train_data(train_df, evidence_df)
 train_dataloader = DataLoader(train_data, shuffle=True, batch_size=16)
@@ -329,12 +313,8 @@ train_dataset = load_positive_train_ds(train_df, evidence_df, train_claims_embed
 print(len(train_dataset))
 
 # %%
-from sentence_transformers.cross_encoder.evaluation import CrossEncoderRerankingEvaluator
-from sentence_transformers.cross_encoder import CrossEncoderTrainingArguments, CrossEncoderTrainer, losses
-from sentence_transformers.util import mine_hard_negatives
-
 eval_dataset = load_positive_train_ds(dev_df, evidence_df,dev_claims_embeddings, evidence_embeddings)
-embedding_model = SentenceTransformer("sentence-transformers/static-retrieval-mrl-en-v1", device="cpu")
+embedding_model = SentenceTransformer("sentence-transformers/static-retrieval-mrl-en-v1", device=DEVICE)
 hard_eval_dataset = mine_hard_negatives(
     eval_dataset,
     embedding_model,
@@ -483,9 +463,6 @@ print("ID to Label Map: ", id2label)
 tokenizer = AutoTokenizer.from_pretrained(classifer_model)
 model = AutoModelForSequenceClassification.from_pretrained(classifer_model, num_labels=num_labels, id2label=id2label, label2id=label_map)
 
-# load the model to GPU if available
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 # %% [markdown]
 # For preparing training data from claims for the ground truth evidence, I will be using  one training instance per evidence.
 # E.g.
@@ -560,13 +537,13 @@ class ClaimEvidenceDataset(Dataset):
 def prepare_data(df, evidence_df, label_map):
     items = []
     for _, row in df.iterrows():
-        claim = row['claim_text']
+        claim_text = row['claim_text']
         for evid_id in row.get('evidences', []):
             evid_row = evidence_df[evidence_df['ID'] == evid_id]
             if evid_row.empty:
                 continue
             # [SEP] token is used to separate claim and evidence
-            text = f"{claim} {tokenizer.sep_token} {evid_row['value'].iloc[0]}"
+            text = f"{claim_text} {tokenizer.sep_token} {evid_row['value'].iloc[0]}"
             label = label_map[row['claim_label']]
             items.append({'text': text, 'label_id': label})
     return items
@@ -699,7 +676,7 @@ def prepare_test_data(claim_text, evidences, evidence_df):
         evid_row = evidence_df[evidence_df['ID'] == evid_id]
         if evid_row.empty:
             continue
-        text = f"{claim_text} [SEP] {evid_row['value'].iloc[0]}"
+        text = f"{claim_text} {tokenizer.sep_token} {evid_row['value'].iloc[0]}"
         items.append({'text': text})
     return items
 
@@ -769,6 +746,10 @@ def predict_claim_label(model, items, tokenizer, device):
 
     return max_labels[0]  # Fallback
 
+# %%
+
+
+# %%
 # load the test output
 with open('test-output.json', 'r') as f:
     test_output = json.load(f)
@@ -793,6 +774,8 @@ with open('test-output.json', 'w') as f:
     json.dump(test_output, f, indent=2)
 
 print("Updated test-output.json with predicted labels!")
+
+
 
 # %% [markdown]
 # ## Object Oriented Programming codes here
