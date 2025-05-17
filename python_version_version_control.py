@@ -63,6 +63,8 @@ for url, filename in zip(urls, filenames):
 
 
 
+# %% [markdown]
+# Imports
 
 # %%
 import faiss
@@ -74,7 +76,14 @@ import torch
 import pandas as pd
 import json
 import re
+from torch.utils.data import DataLoader, Dataset
+from torch.optim import AdamW
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, classification_report, confusion_matrix
+import seaborn as sns
+import numpy as np
+from tqdm import tqdm
 
+# %%
 def retrieve(evi_ebds, claim_ebds, evi_df, claim_df, retrival_top_k, rerank_top_k,threshold_activated,score_threshold, cross_encoder,dev):
     embedding_dim = evi_ebds.shape[1]
     index = faiss.IndexFlatL2(embedding_dim)
@@ -475,7 +484,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # 1. (claim_tex [SEP] evidence_text_1, "SUPPORTS")
 # 2. (claim_text [SEP] evidence_text_2, "SUPPORTS")
 # 3. (claim_text [SEP] evidence_text_3, "REFUTES")
-# 4. (claim_text [SEP] evidence_text_4, "NOT_ENOUGH_INFO")
+# 4. (claim_text [SEP] "NOT_ENOUGH_INFO")
 # 5. (claim_text [SEP] evidence_text_5, "DISPUTED")
 # 
 # Kind of ways, because this is the best way to train data for the model.
@@ -495,19 +504,15 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # We will try to look for f score and accuracy for the evaluation.
 # 
 # For the ones that has label but no listed evidence, we will create a special input format like
-# (claim_text [SEP], "NOT_ENOUGH_INFO") since we are not allowed to modify the dataset or can't skip it written in the project description.
+# (claim_text [SEP], "NOT_ENOUGH_INFO") since we are not allowed to modify the dataset or can't skip it written in the project description.This may be a problem with imbalance dataset, however, at the end I am relying on retrival, and if the retrival is good with no evidence, then I will have to make it not enough info
 # 
+# claims labllee
 # 
+# Also later changed to tokenizers real separator (tokenizer.sep_token) in order to learn the model better.
+# 
+# Also I added a checkpoint to train fixed 10 epochs and save the best model by tracking the best accuracy.
 
 # %%
-import torch
-from torch.utils.data import DataLoader, Dataset
-from torch.optim import AdamW
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, classification_report, confusion_matrix
-import seaborn as sns
-import numpy as np
-from tqdm import tqdm
-
 # custom pytorch dataset class
 class ClaimEvidenceDataset(Dataset):
     def __init__(self, data_list, tokenizer, max_len=128):
@@ -542,10 +547,14 @@ def prepare_data(df, evidence_df, label_map):
         for evid_id in row.get('evidences', []):
             evid_row = evidence_df[evidence_df['ID'] == evid_id]
             if evid_row.empty: 
+                # show if evidence is not found
+                print(f"Evidence ID {evid_id} not found for claim ID {row['ID']}")
                 continue
-            text = f"{claim} [SEP] {evid_row['value'].iloc[0]}"
-            label = label_map[row['claim_label']]
-            items.append({'text': text, 'label_id': label})
+
+            else:
+                text = f"{claim} {tokenizer.sep_token} {evid_row['value'].iloc[0]}"
+                label = label_map[row['claim_label']]
+                items.append({'text': text, 'label_id': label})
     return items
 
 # build datasets and dataloaders
@@ -558,9 +567,9 @@ print("Done preparing daata: ", len(train_items), " train items and ", len(dev_i
 train_dataset = ClaimEvidenceDataset(train_items, tokenizer)
 dev_dataset   = ClaimEvidenceDataset(dev_items,   tokenizer)
 
-# print to debug the claimevidence dataset is working
-print("Train Dataset: ", train_dataset[0])
-print("Dev Dataset: ", dev_dataset[0])
+# # print to debug the claimevidence dataset is working
+# print("Train Dataset: ", train_dataset[0])
+# print("Dev Dataset: ", dev_dataset[0])
 
 train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
 dev_loader   = DataLoader(dev_dataset,   batch_size=16)
@@ -568,18 +577,23 @@ dev_loader   = DataLoader(dev_dataset,   batch_size=16)
 
 
 # %%
-# optimizer
-optimizer = AdamW(model.parameters(), lr=1e-5)
-
 # training loop (3 epochs)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
 
-for epoch in range(3):
+# variables for training
+num_epochs = 10
+best_f1 = 0
+best_model_state = None
+
+# optimizer
+optimizer = AdamW(model.parameters(), lr=1e-5)
+
+for epoch in range(num_epochs):
     model.train()
     total_loss = 0
     # add progress bar for batches
-    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/3 (Training)")
+    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Training)")
     for batch in progress_bar:
         optimizer.zero_grad()
         input_ids = batch['input_ids'].to(device)
@@ -605,7 +619,7 @@ for epoch in range(3):
     # evaluation on dev set
     model.eval()
     preds, trues = [], []
-    eval_progress = tqdm(dev_loader, desc=f"Epoch {epoch+1}/3 (Evaluating)")
+    eval_progress = tqdm(dev_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Evaluating)")
     with torch.no_grad():
         for batch in eval_progress:
             input_ids = batch['input_ids'].to(device)
@@ -618,13 +632,143 @@ for epoch in range(3):
             trues.extend(labels.cpu().tolist())
 
     acc = accuracy_score(trues, preds)
-    print(f"Epoch {epoch+1} Dev  acc: {acc:.4f}")
+    precision, recall, f1, _ = precision_recall_fscore_support(trues, preds, average='weighted')
+    print(f"Epoch {epoch+1} Dev acc: {acc:.4f}, F1: {f1:.4f}")
     print(classification_report(trues, preds, target_names=label_map.keys()))
+
+    # Save the best model based on F1 score
+    if f1 > best_f1:
+        best_f1 = f1
+        best_model_state = model.state_dict().copy()
+        print(f"New best model saved with F1: {f1:.4f}")
+
+# Load the best model state
+if best_model_state:
+    model.load_state_dict(best_model_state)
+    torch.save(model.state_dict(), "claim_evidence_classifier_best.pth")
+    print(f"Best model saved with F1: {best_f1:.4f}")
 
 # %% [markdown]
 # Now I am going to load the best model state to store in state_dict to a file
 # 
 # Also I will now need to prepare and batch the test data for prediction and for that I will use pytorch dataset and dataloader for convenience consistency and speed as google collab is slow
+
+# %%
+
+
+# %%
+# evidence_df
+# dev_df
+# train_df
+# tst_df
+# test_df
+
+# %%
+# # Save the model for later use
+# torch.save(model.state_dict(), "claim_evidence_classifier.pth")
+# print("Model saved successfully!")
+
+# Function to prepare test data
+def prepare_test_data(claim_text, evidences, evidence_df):
+    items = []
+    for evid_id in evidences:
+        evid_row = evidence_df[evidence_df['ID'] == evid_id]
+        if evid_row.empty:
+            continue
+        text = f"{claim_text} [SEP] {evid_row['value'].iloc[0]}"
+        items.append({'text': text})
+    return items
+
+# Function to predict labels
+def predict_claim_label(model, items, tokenizer, device):
+    model.eval()
+    
+    # If no evidence, return NOT_ENOUGH_INFO
+    if not items:
+        return "NOT_ENOUGH_INFO"
+    
+    # Create a dataset and dataloader for the items
+    class PredictionDataset(Dataset):
+        def __init__(self, items, tokenizer, max_len=128):
+            self.tokenizer = tokenizer
+            self.texts = [item['text'] for item in items]
+            self.max_len = max_len
+
+        def __len__(self):
+            return len(self.texts)
+
+        def __getitem__(self, idx):
+            encoding = self.tokenizer(
+                self.texts[idx],
+                add_special_tokens=True,
+                max_length=self.max_len,
+                padding='max_length',
+                truncation=True,
+                return_tensors='pt'
+            )
+            return {
+                'input_ids': encoding['input_ids'].squeeze(0),
+                'attention_mask': encoding['attention_mask'].squeeze(0)
+            }
+    
+    dataset = PredictionDataset(items, tokenizer)
+    dataloader = DataLoader(dataset, batch_size=8)
+    
+    predictions = []
+    with torch.no_grad():
+        for batch in dataloader:
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+            logits = outputs.logits
+            preds = torch.argmax(logits, dim=1).cpu().tolist()
+            predictions.extend(preds)
+    
+    # Count occurrences of each label
+    counts = {}
+    for pred in predictions:
+        label = id2label[pred]
+        counts[label] = counts.get(label, 0) + 1
+    
+    # Return the most common label, or if tie, prioritize in order: SUPPORTS, REFUTES, DISPUTED, NOT_ENOUGH_INFO
+    if not counts:
+        return "NOT_ENOUGH_INFO"
+    
+    max_count = max(counts.values())
+    max_labels = [label for label, count in counts.items() if count == max_count]
+    
+    priority_order = ["SUPPORTS", "REFUTES", "DISPUTED", "NOT_ENOUGH_INFO"]
+    for label in priority_order:
+        if label in max_labels:
+            return label
+    
+    return max_labels[0]  # Fallback
+
+# Load the test output
+with open('test-output.json', 'r') as f:
+    test_output = json.load(f)
+
+# Predict labels for each claim
+print("Predicting labels for test claims...")
+for claim_id, claim_data in tqdm(test_output.items()):
+    claim_text = claim_data['claim_text']
+    evidences = claim_data['evidences']
+    
+    # Prepare data for this claim
+    items = prepare_test_data(claim_text, evidences, evidence_df)
+    
+    # Get prediction
+    predicted_label = predict_claim_label(model, items, tokenizer, device)
+    
+    # Update the label
+    test_output[claim_id]['claim_label'] = predicted_label
+
+# Save the updated test output
+with open('test-output-updated.json', 'w') as f:
+    json.dump(test_output, f, indent=2)
+
+print("Updated test-output.json with predicted labels!")
 
 # %% [markdown]
 # ## Object Oriented Programming codes here
