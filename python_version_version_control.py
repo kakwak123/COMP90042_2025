@@ -668,14 +668,14 @@ if best_model_state:
 # torch.save(model.state_dict(), "claim_evidence_classifier.pth")
 # print("Model saved successfully!")
 
-# Function to prepare test data
-def prepare_test_data(claim_text, evidences, evidence_df):
+# A function to prepare test data
+def prepare_test_data(claim_text, evidences, evidence_df, tokenizer):
     items = []
     for evid_id in evidences:
         evid_row = evidence_df[evidence_df['ID'] == evid_id]
         if evid_row.empty:
             continue
-        text = f"{claim_text} [SEP] {evid_row['value'].iloc[0]}"
+        text = f"{claim_text} {tokenizer.sep_token} {evid_row['value'].iloc[0]}"
         items.append({'text': text})
     return items
 
